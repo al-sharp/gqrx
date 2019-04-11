@@ -217,6 +217,10 @@ void RemoteControl::startRead()
         answer = cmd_get_mode();
     else if (cmd == "M")
         answer = cmd_set_mode(cmdlist);
+    else if (cmd == "x")
+        answer = cmd_start_demod();
+    else if (cmd == "X")
+        answer = cmd_stop_demod();
     else if (cmd == "l")
         answer = cmd_get_level(cmdlist);
     else if (cmd == "L")
@@ -528,6 +532,24 @@ QString RemoteControl::cmd_get_mode()
     return QString("%1\n%2\n")
                    .arg(intToModeStr(rc_mode))
                    .arg(rc_passband_hi - rc_passband_lo);
+}
+
+/* Start streaming [SAH]
+ */
+QString RemoteControl::cmd_start_demod()
+{
+    // emit signal to Start conversion
+    emit doDSP(true);
+    return QString("RPRT 0\n"); // success
+}
+
+/* Stop streaming [SAH]
+ */
+QString RemoteControl::cmd_stop_demod()
+{
+    // emit signal to Stop conversion
+    emit doDSP(false);
+    return QString("RPRT 0\n"); // success
 }
 
 /* Set mode and passband */

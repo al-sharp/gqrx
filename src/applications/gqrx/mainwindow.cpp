@@ -277,6 +277,7 @@ MainWindow::MainWindow(const QString cfgfile, bool edit_conf, QWidget *parent) :
     connect(remote, SIGNAL(stopAudioRecorderEvent()), uiDockAudio, SLOT(stopAudioRecorder()));
     connect(ui->plotter, SIGNAL(newFilterFreq(int, int)), remote, SLOT(setPassband(int, int)));
     connect(remote, SIGNAL(newPassband(int)), this, SLOT(setPassband(int)));
+    connect(remote, SIGNAL(doDSP(bool)), this, SLOT(setDecoder(bool))); // SAH
 
     rds_timer = new QTimer(this);
     connect(rds_timer, SIGNAL(timeout()), this, SLOT(rdsTimeout()));
@@ -2111,6 +2112,15 @@ void MainWindow::setPassband(int bandwidth)
 
     on_plotter_newFilterFreq(lo, hi);
 }
+
+/* signal from remote to activate or deactivate DSP
+ */
+void MainWindow::setDecoder(bool activate)
+{
+    printf("Remote setDecoder: %s\n",(activate ? "on" : "off"));
+    on_actionDSP_triggered( activate );
+}
+
 
 /** Launch Gqrx google group website. */
 void MainWindow::on_actionUserGroup_triggered()
