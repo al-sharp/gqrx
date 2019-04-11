@@ -534,24 +534,6 @@ QString RemoteControl::cmd_get_mode()
                    .arg(rc_passband_hi - rc_passband_lo);
 }
 
-/* Start streaming [SAH]
- */
-QString RemoteControl::cmd_start_demod()
-{
-    // emit signal to Start conversion
-    emit doDSP(true);
-    return QString("RPRT 0\n"); // success
-}
-
-/* Stop streaming [SAH]
- */
-QString RemoteControl::cmd_stop_demod()
-{
-    // emit signal to Stop conversion
-    emit doDSP(false);
-    return QString("RPRT 0\n"); // success
-}
-
 /* Set mode and passband */
 QString RemoteControl::cmd_set_mode(QStringList cmdlist)
 {
@@ -768,6 +750,23 @@ QString RemoteControl::cmd_lnb_lo(QStringList cmdlist)
         return QString("%1\n").arg((qint64)(rc_lnb_lo_mhz * 1e6));
     }
 }
+
+/* Start streaming
+ */
+QString RemoteControl::cmd_start_demod()
+{
+    emit triggerDSP(true);
+    return QString("RPRT 0\n");
+}
+
+/* Stop streaming
+ */
+QString RemoteControl::cmd_stop_demod()
+{
+    emit triggerDSP(false);
+    return QString("RPRT 0\n");
+}
+
 
 /*
  * '\dump_state' used by hamlib clients, e.g. xdx, fldigi, rigctl and etc

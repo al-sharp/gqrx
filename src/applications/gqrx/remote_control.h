@@ -100,7 +100,7 @@ signals:
     void newSquelchLevel(double level);
     void startAudioRecorderEvent();
     void stopAudioRecorderEvent();
-    void doDSP(bool); // SAH
+    void triggerDSP(bool);
 
 private slots:
     void acceptConnection();

@@ -23,6 +23,10 @@ Supported commands:
     Set status of audio recorder to <status>
  q|Q
     Close connection
+ x
+    Start DSP
+ X
+    Stop DSP
  AOS
     Acquisition of signal (AOS) event, start audio recording
  LOS
