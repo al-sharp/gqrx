@@ -217,9 +217,11 @@ void RemoteControl::startRead()
         answer = cmd_get_mode();
     else if (cmd == "M")
         answer = cmd_set_mode(cmdlist);
-    else if (cmd == "x")
+    else if (cmd == "d")
+        answer = cmd_get_demod();
+    else if (cmd == "DSP1")
         answer = cmd_start_demod();
-    else if (cmd == "X")
+    else if (cmd == "DSP0")
         answer = cmd_stop_demod();
     else if (cmd == "l")
         answer = cmd_get_level(cmdlist);
@@ -247,6 +249,10 @@ void RemoteControl::startRead()
         answer = cmd_lnb_lo(cmdlist);
     else if (cmd == "\\dump_state")
         answer = cmd_dump_state();
+    else if (cmd == "EXIT") {
+        answer = "BYE";
+        QCoreApplication::quit();
+    }
     else if (cmd == "q" || cmd == "Q")
     {
         // FIXME: for now we assume 'close' command
@@ -749,6 +755,16 @@ QString RemoteControl::cmd_lnb_lo(QStringList cmdlist)
     {
         return QString("%1\n").arg((qint64)(rc_lnb_lo_mhz * 1e6));
     }
+}
+
+/* Get streaming status: 0,1
+ */
+QString RemoteControl::cmd_get_demod()
+{
+    if (receiver_running) {
+        return QString("1\n");
+    }
+    return QString("0\n");
 }
 
 /* Start streaming

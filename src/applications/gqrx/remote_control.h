@@ -136,8 +136,9 @@ private:
     QString     cmd_set_freq(QStringList cmdlist);
     QString     cmd_get_mode();
     QString     cmd_set_mode(QStringList cmdlist);
-    QString     cmd_start_demod(); // x
-    QString     cmd_stop_demod();  // X
+    QString     cmd_get_demod();
+    QString     cmd_start_demod();
+    QString     cmd_stop_demod();
     QString     cmd_get_level(QStringList cmdlist);
     QString     cmd_set_level(QStringList cmdlist);
     QString     cmd_get_func(QStringList cmdlist);
