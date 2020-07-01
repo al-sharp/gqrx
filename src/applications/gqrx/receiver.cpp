@@ -49,6 +49,8 @@
 #include <gnuradio/audio/sink.h>
 #endif
 
+#define DEFAULT_AUDIO_GAIN -6.0
+#define TARGET_QUAD_RATE 1e6
 
 /**
  * @brief Public contructor.
@@ -102,33 +104,26 @@ receiver::receiver(const std::string input_device,
             d_decim = 1;
         }
 
-        d_quad_rate = d_input_rate / (double)d_decim;
+        d_decim_rate = d_input_rate / (double)d_decim;
     }
     else
     {
-        d_quad_rate = d_input_rate;
+        d_decim_rate = d_input_rate;
     }
 
-
-    // create I/Q sink and close it
-    iq_sink = gr::blocks::file_sink::make(sizeof(gr_complex), get_null_file().c_str(), true);
-    iq_sink->set_unbuffered(true);
-    iq_sink->close();
-
+    d_ddc_decim = std::max(1, (int)(d_decim_rate / TARGET_QUAD_RATE));
+    d_quad_rate = d_decim_rate / d_ddc_decim;
+    ddc = make_downconverter_cc(d_ddc_decim, 0.0, d_decim_rate);
     rx  = make_nbrx(d_quad_rate, d_audio_rate);
-    rot = gr::blocks::rotator_cc::make(0.0);
 
     iq_swap = make_iq_swap_cc(false);
-    dc_corr = make_dc_corr_cc(d_quad_rate, 1.0);
-    iq_fft = make_rx_fft_c(8192u, gr::filter::firdes::WIN_HANN);
+    dc_corr = make_dc_corr_cc(d_decim_rate, 1.0);
+    iq_fft = make_rx_fft_c(8192u, d_decim_rate, gr::filter::firdes::WIN_HANN);
 
     audio_fft = make_rx_fft_f(8192u, gr::filter::firdes::WIN_HANN);
-    audio_gain0 = gr::blocks::multiply_const_ff::make(0.1);
-    audio_gain1 = gr::blocks::multiply_const_ff::make(0.1);
-
-    wav_sink = gr::blocks::wavfile_sink::make(get_null_file().c_str(), 2,
-                                              (unsigned int) d_audio_rate,
-                                              16);
+    audio_gain0 = gr::blocks::multiply_const_ff::make(0);
+    audio_gain1 = gr::blocks::multiply_const_ff::make(0);
+    set_af_gain(DEFAULT_AUDIO_GAIN);
 
     audio_udp_sink = make_udp_sink_f();
 
@@ -194,6 +189,8 @@ void receiver::stop()
  */
 void receiver::set_input_device(const std::string device)
 {
+    std::string error = "";
+
     if (device.empty())
         return;
 
@@ -227,7 +224,17 @@ void receiver::set_input_device(const std::string device)
     }
 
     src.reset();
-    src = osmosdr::source::make(device);
+
+    try
+    {
+        src = osmosdr::source::make(device);
+    }
+    catch (std::runtime_error &x)
+    {
+        error = x.what();
+        src = osmosdr::source::make("file="+get_random_file()+",freq=428e6,rate=96000,repeat=true,throttle=true");
+    }
+
     if(src->get_sample_rate() != 0)
         set_input_rate(src->get_sample_rate());
 
@@ -243,6 +250,11 @@ void receiver::set_input_device(const std::string device)
 
     if (d_running)
         tb->start();
+
+    if (error != "")
+    {
+        throw std::runtime_error(error);
+    }
 }
 
 
@@ -342,10 +354,13 @@ double receiver::set_input_rate(double rate)
         d_input_rate = rate;
     }
 
-    d_quad_rate = d_input_rate / (double)d_decim;
-    dc_corr->set_sample_rate(d_quad_rate);
+    d_decim_rate = d_input_rate / (double)d_decim;
+    d_ddc_decim = std::max(1, (int)(d_decim_rate / TARGET_QUAD_RATE));
+    d_quad_rate = d_decim_rate / d_ddc_decim;
+    dc_corr->set_sample_rate(d_decim_rate);
+    ddc->set_decim_and_samp_rate(d_ddc_decim, d_decim_rate);
     rx->set_quad_rate(d_quad_rate);
-    update_ddc();
+    iq_fft->set_quad_rate(d_decim_rate);
     tb->unlock();
 
     return d_input_rate;
@@ -389,17 +404,20 @@ unsigned int receiver::set_input_decim(unsigned int decim)
             d_decim = 1;
         }
 
-        d_quad_rate = d_input_rate / (double)d_decim;
+        d_decim_rate = d_input_rate / (double)d_decim;
     }
     else
     {
-        d_quad_rate = d_input_rate;
+        d_decim_rate = d_input_rate;
     }
 
     // update quadrature rate
-    dc_corr->set_sample_rate(d_quad_rate);
+    d_ddc_decim = std::max(1, (int)(d_decim_rate / TARGET_QUAD_RATE));
+    d_quad_rate = d_decim_rate / d_ddc_decim;
+    dc_corr->set_sample_rate(d_decim_rate);
+    ddc->set_decim_and_samp_rate(d_ddc_decim, d_decim_rate);
     rx->set_quad_rate(d_quad_rate);
-    update_ddc();
+    iq_fft->set_quad_rate(d_decim_rate);
 
     if (d_decim >= 2)
     {
@@ -413,7 +431,7 @@ unsigned int receiver::set_input_decim(unsigned int decim)
 
 #ifdef CUSTOM_AIRSPY_KERNELS
     if (input_devstr.find("airspy") != std::string::npos)
-        src->set_bandwidth(d_quad_rate);
+        src->set_bandwidth(d_decim_rate);
 #endif
 
     if (d_running)
@@ -637,7 +655,7 @@ receiver::status receiver::set_auto_gain(bool automatic)
 receiver::status receiver::set_filter_offset(double offset_hz)
 {
     d_filter_offset = offset_hz;
-    update_ddc();
+    ddc->set_center_freq(d_filter_offset - d_cw_offset);
 
     return STATUS_OK;
 }
@@ -656,7 +674,7 @@ double receiver::get_filter_offset(void) const
 receiver::status receiver::set_cw_offset(double offset_hz)
 {
     d_cw_offset = offset_hz;
-    update_ddc();
+    ddc->set_center_freq(d_filter_offset - d_cw_offset);
     rx->set_cw_offset(d_cw_offset);
 
     return STATUS_OK;
@@ -975,19 +993,18 @@ receiver::status receiver::start_audio_recording(const std::string filename)
         return STATUS_ERROR;
     }
 
-    // not strictly necessary to lock but I think it is safer
-    tb->lock();
-
     // if this fails, we don't want to go and crash now, do we
     try {
-        wav_sink->open(filename.c_str());
-        wav_sink->set_sample_rate((unsigned int) d_audio_rate);
+        wav_sink = gr::blocks::wavfile_sink::make(filename.c_str(), 2,
+                                                  (unsigned int) d_audio_rate,
+                                                  16);
     }
     catch (std::runtime_error &e) {
         std::cout << "Error opening " << filename << ": " << e.what() << std::endl;
         return STATUS_ERROR;
     }
 
+    tb->lock();
     tb->connect(rx, 0, wav_sink, 0);
     tb->connect(rx, 1, wav_sink, 1);
     tb->unlock();
@@ -1021,6 +1038,7 @@ receiver::status receiver::stop_audio_recording()
     tb->disconnect(rx, 0, wav_sink, 0);
     tb->disconnect(rx, 1, wav_sink, 1);
     tb->unlock();
+    wav_sink.reset();
     d_recording_wav = false;
 
     std::cout << "Audio recorder stopped" << std::endl;
@@ -1073,12 +1091,14 @@ receiver::status receiver::start_audio_playback(const std::string filename)
     tb->disconnect(rx, 1, audio_gain1, 0);
     tb->disconnect(rx, 0, audio_fft, 0);
     tb->disconnect(rx, 0, audio_udp_sink, 0);
+    tb->disconnect(rx, 1, audio_udp_sink, 1);
     tb->connect(rx, 0, audio_null_sink0, 0); /** FIXME: other channel? */
     tb->connect(rx, 1, audio_null_sink1, 0); /** FIXME: other channel? */
     tb->connect(wav_src, 0, audio_gain0, 0);
     tb->connect(wav_src, 1, audio_gain1, 0);
     tb->connect(wav_src, 0, audio_fft, 0);
     tb->connect(wav_src, 0, audio_udp_sink, 0);
+    tb->connect(wav_src, 1, audio_udp_sink, 1);
     start();
 
     std::cout << "Playing audio from " << filename << std::endl;
@@ -1095,12 +1115,14 @@ receiver::status receiver::stop_audio_playback()
     tb->disconnect(wav_src, 1, audio_gain1, 0);
     tb->disconnect(wav_src, 0, audio_fft, 0);
     tb->disconnect(wav_src, 0, audio_udp_sink, 0);
+    tb->disconnect(wav_src, 1, audio_udp_sink, 1);
     tb->disconnect(rx, 0, audio_null_sink0, 0);
     tb->disconnect(rx, 1, audio_null_sink1, 0);
     tb->connect(rx, 0, audio_gain0, 0);
     tb->connect(rx, 1, audio_gain1, 0);
     tb->connect(rx, 0, audio_fft, 0);  /** FIXME: other channel? */
     tb->connect(rx, 0, audio_udp_sink, 0);
+    tb->connect(rx, 1, audio_udp_sink, 1);
     start();
 
     /* delete wav_src since we can not change file name */
@@ -1110,9 +1132,9 @@ receiver::status receiver::stop_audio_playback()
 }
 
 /** Start UDP streaming of audio. */
-receiver::status receiver::start_udp_streaming(const std::string host, int port)
+receiver::status receiver::start_udp_streaming(const std::string host, int port, bool stereo)
 {
-    audio_udp_sink->start_streaming(host, port);
+    audio_udp_sink->start_streaming(host, port, stereo);
     return STATUS_OK;
 }
 
@@ -1136,28 +1158,23 @@ receiver::status receiver::start_iq_recording(const std::string filename)
         return STATUS_ERROR;
     }
 
-    // iq_sink was created in the constructor
-    if (iq_sink) {
-        tb->lock();
-        if (!iq_sink->open(filename.c_str()))
-        {
-            status = STATUS_ERROR;
-        }
-        else
-        {
-            if (d_decim >= 2)
-                tb->connect(input_decim, 0, iq_sink, 0);
-            else
-                tb->connect(src, 0, iq_sink, 0);
-
-            d_recording_iq = true;
-        }
-        tb->unlock();
+    try
+    {
+        iq_sink = gr::blocks::file_sink::make(sizeof(gr_complex), filename.c_str(), true);
     }
-    else {
-        std::cout << __func__ << ": I/Q file sink does not exist" << std::endl;
+    catch (std::runtime_error &e)
+    {
+        std::cout << __func__ << ": couldn't open I/Q file" << std::endl;
         return STATUS_ERROR;
     }
+
+    tb->lock();
+    if (d_decim >= 2)
+        tb->connect(input_decim, 0, iq_sink, 0);
+    else
+        tb->connect(src, 0, iq_sink, 0);
+    d_recording_iq = true;
+    tb->unlock();
 
     return status;
 }
@@ -1179,6 +1196,7 @@ receiver::status receiver::stop_iq_recording()
         tb->disconnect(src, 0, iq_sink, 0);
 
     tb->unlock();
+    iq_sink.reset();
     d_recording_iq = false;
 
     return STATUS_OK;
@@ -1318,10 +1336,11 @@ void receiver::connect_all(rx_chain type)
     // Audio path (if there is a receiver)
     if (type != RX_CHAIN_NONE)
     {
-        tb->connect(b, 0, rot, 0);
-        tb->connect(rot, 0, rx, 0);
+        tb->connect(b, 0, ddc, 0);
+        tb->connect(ddc, 0, rx, 0);
         tb->connect(rx, 0, audio_fft, 0);
         tb->connect(rx, 0, audio_udp_sink, 0);
+        tb->connect(rx, 1, audio_udp_sink, 1);
         tb->connect(rx, 0, audio_gain0, 0);
         tb->connect(rx, 1, audio_gain1, 0);
         tb->connect(audio_gain0, 0, audio_snk, 0);
@@ -1340,12 +1359,6 @@ void receiver::connect_all(rx_chain type)
         tb->connect(rx, 0, sniffer_rr, 0);
         tb->connect(sniffer_rr, 0, sniffer, 0);
     }
-}
-
-/** Convenience function to update all DDC related components. */
-void receiver::update_ddc()
-{
-    rot->set_phase_inc(2.0 * M_PI * (-d_filter_offset + d_cw_offset) / d_quad_rate);
 }
 
 void receiver::get_rds_data(std::string &outbuff, int &num)
